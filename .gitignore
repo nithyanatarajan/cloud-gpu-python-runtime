@@ -1,0 +1,22 @@
+# Environment files
+.venv/
+venv/
+.env
+.envrc
+
+# JetBrains IDEs
+.idea
+
+# MacOS specific files
+.DS_Store
+**/.DS_Store
+
+# VectorDB
+**/*.bin
+
+# SQLite database files
+**/*.sqlite
+**/*.sqlite3
+
+# Secret keys
+**/*.pem
