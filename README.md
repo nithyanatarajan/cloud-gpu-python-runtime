@@ -154,3 +154,29 @@ aws ec2 describe-addresses \
 
 You 'll have to run the scripts of [conda_installation.sh](conda_installation.sh) within the EC2 instance to set up the
 conda environment. It is not yet automated.
+
+## 🛠️ Troubleshooting
+
+### "InsufficientInstanceCapacity" or "LimitExceeded" when creating GPU instance
+
+AWS accounts have default limits (quotas) for GPU instances that may be set to `0` initially.
+
+To check your current limits and request an increase:
+
+#### **Check current quota:**
+```shell
+aws service-quotas get-service-quota   --service-code ec2   --quota-code L-DB2E81BA   --region ap-south-1
+```
+
+#### **Request a limit increase using CLI:**
+```shell
+aws service-quotas request-service-quota-increase   --service-code ec2   --quota-code L-DB2E81BA   --desired-value 4   --region ap-south-1
+```
+
+Alternatively, submit a request manually:
+
+- Go to the [AWS Service Quotas console](https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas)
+- Search for "Running On-Demand G and VT instances"
+- Submit a **Request quota increase** for your desired instance type (`g4dn.xlarge`, `g5.xlarge`, etc.) in your target region (e.g., `ap-south-1`).
+
+> ℹ️ Approval may take a few minutes to hours depending on your AWS account history.
