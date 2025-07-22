@@ -1,5 +1,5 @@
 #!/bin/bash
-  STACK_NAME="gpu-remote-kernel"
+STACK_NAME="gpu-remote-kernel"
 
 echo "🔻 Stopping resources for stack: $STACK_NAME"
 
