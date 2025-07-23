@@ -22,7 +22,7 @@ all required drivers and software into a reusable AMI.
 ### 1️⃣ Validate the Image Builder template
 
 ```shell
-cfn-lint gpu_ami_builder.yaml
+cfn-lint gpu_ami_builder_amazon_linux.yaml
 ```
 
 ### 2️⃣ Deploy Image Builder infrastructure
@@ -30,7 +30,7 @@ cfn-lint gpu_ami_builder.yaml
 ```shell
 aws cloudformation deploy \
   --stack-name gpu-ami-builder \
-  --template-file gpu_ami_builder.yaml \
+  --template-file gpu_ami_builder_amazon_linux.yaml \
   --region ap-south-1 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
@@ -58,6 +58,9 @@ aws imagebuilder start-image-pipeline-execution --image-pipeline-arn $PIPELINE_A
 # check if the pipeline execution started successfully
 aws imagebuilder get-image-pipeline --image-pipeline-arn $PIPELINE_ARN
 ```
+
+> If there is a failure, then run [cleanup_imagebuilder.sh](scripts/cleanup_imagebuilder.sh) before redeploying the
+> stack.
 
 ### 5️⃣ List all images built by the pipelines
 

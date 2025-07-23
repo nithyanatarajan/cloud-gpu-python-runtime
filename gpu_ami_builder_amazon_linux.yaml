@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to define Image Builder infrastructure for baking a GPU-prepared AMI on Amazon Linux 2023.
+
+Resources:
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ ec2.amazonaws.com ]
+            Action: [ sts:AssumeRole ]
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ImageBuilderAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - imagebuilder:GetComponent
+                Resource: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:component/gpu-prep-component/*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref InstanceRole ]
+
+  GPUPrepComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: gpu-prep-component
+      Platform: Linux
+      Version: 1.0.0
+      Data: |
+        name: gpu-prep-component
+        description: GPU instance preparation with drivers and software stack for Amazon Linux 2023
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: SystemPreparation
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -ex
+                    - echo "Starting system preparation for GPU instance..."
+                    - systemctl enable amazon-ssm-agent
+                    - systemctl start amazon-ssm-agent
+                    - dnf update -y
+                    - dnf install -y gcc make dkms kernel-devel kernel-headers curl dnf-plugins-core
+
+              - name: NvidiaDriverInstall
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - echo "Installing NVIDIA drivers..."
+                    - dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/amazonlinux2023/x86_64/cuda-rhel9.repo
+                    - dnf clean all
+                    - dnf install -y nvidia-driver-latest-dkms
+                    - echo "Installing CUDA drivers..."
+                    - dnf install -y cuda-drivers-535
+                    - echo "Installing CUDA toolkit..."
+                    - dnf install -y cuda-toolkit-12-2
+                    - echo "Installation of NVIDIA drivers, CUDA drivers and CUDA toolkit completed. Verifying installation..."
+                    - nvidia-smi || true
+
+              - name: MinicondaInstall
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - echo "Installing Miniconda..."
+                    - curl -sLo /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+                    - bash /tmp/miniconda.sh -b -p /opt/miniconda
+                    - echo 'export PATH="/opt/miniconda/bin:$PATH"' >> /etc/profile
+                    - source /opt/miniconda/etc/profile.d/conda.sh
+                    - conda deactivate || true
+                    - conda remove -n gpu-env --all -y || true
+
+              - name: CondaEnvSetup
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - echo "Creating and activating conda environment..."
+                    - source /opt/miniconda/etc/profile.d/conda.sh
+                    - conda create -n gpu-env python=3.11 numpy=1.26.4 tensorflow=2.15.0 scipy pandas scikit-learn matplotlib seaborn nbdime ipykernel -c conda-forge -y
+                    - conda activate gpu-env
+                    - pip install torch==2.2.2+cu121 torchvision==0.17.2+cu121 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu121
+                    - pip install spacy==3.7.4 protobuf~=4.23.4 diskcache huggingface_hub ipywidgets tiktoken pymupdf langchain==0.1.1 langchain-community==0.0.13 chromadb==0.4.22 sentence-transformers==2.3.1
+
+              - name: FinalSetup
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - echo "Final setup for GPU environment..."
+                    - export CUDA_HOME=/usr/local/cuda
+                    - export PATH=$CUDA_HOME/bin:$PATH
+                    - export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+                    - nvcc --version || true
+                    - CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75" FORCE_CMAKE=1 pip install llama-cpp-python --force-reinstall --no-deps --no-cache-dir -v
+                    - python -m ipykernel install --user --name gpu-env
+
+  GPUImageRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: gpu-prep-recipe
+      Version: 1.0.0
+      ParentImage: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}"
+      Components:
+        - ComponentArn: !Ref GPUPrepComponent
+
+  GPUInfraConfig:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: gpu-infra-config
+      InstanceProfileName: !Ref InstanceProfile
+      InstanceTypes:
+        - m5.large
+
+  GPUImagePipeline:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: gpu-prep-pipeline
+      ImageRecipeArn: !Ref GPUImageRecipe
+      InfrastructureConfigurationArn: !Ref GPUInfraConfig
+
+Outputs:
+  GPUImagePipelineArn:
+    Description: ARN of GPU Image Pipeline
+    Value: !Ref GPUImagePipeline
