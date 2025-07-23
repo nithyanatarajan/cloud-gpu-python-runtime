@@ -145,32 +145,35 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
+          set -ex
 
-          # ----- SYSTEM PREP -----
-          sudo apt-get update
-          sudo apt-get upgrade -y
-          sudo apt-get install -y build-essential gcc make dkms linux-headers-$(uname -r) curl
+          # ---------- SYSTEM PREPARATION ----------
+          apt-get update && apt-get upgrade -y
+          apt-get install -y build-essential gcc make dkms linux-headers-$(uname -r) curl
 
-          # ----- NVIDIA DRIVER INSTALL (repo-managed and consistent) -----
-          sudo apt-key del 7fa2af80 || true
+          # ---------- NVIDIA DRIVER INSTALL ----------
+          apt-key del 7fa2af80 || true
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-          sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-          sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
-          sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
-          sudo apt-get update
-          sudo apt-get install -y cuda-drivers-535
-          sudo apt-get install -y cuda-toolkit-12-2
-
+          mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+          apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
+          add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+          apt-get update
+          apt-get install -y cuda-drivers-535
+          apt-get install -y cuda-toolkit-12-2
           nvidia-smi || true
 
-          # ----- MINICONDA INSTALL -----
+          # ---------- MINICONDA INSTALL ----------
           curl -sLo /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-          sudo bash /tmp/miniconda.sh -b -p /opt/miniconda
+          bash /tmp/miniconda.sh -b -p /opt/miniconda
           export PATH="/opt/miniconda/bin:$PATH"
-          sudo bash -c 'echo "export PATH=\"/opt/miniconda/bin:\$PATH\"" >> /etc/profile'
+          echo 'export PATH="/opt/miniconda/bin:$PATH"' >> /etc/profile
+          source /opt/miniconda/etc/profile.d/conda.sh
 
           # Ensure conda initialized for ubuntu user:
           sudo -u ubuntu /opt/miniconda/bin/conda init bash
+
+          conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+          conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
           echo "✅ Base system ready. SSH in and manually set up python interpreter."
 
