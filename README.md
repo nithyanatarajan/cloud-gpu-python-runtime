@@ -1,13 +1,22 @@
 # Remote GPU Kernel Setup
 
-This document provides instructions for setting up a remote GPU kernel using AWS CloudFormation. The setup allows you to
-run GPU-accelerated tasks on a remote instance.
+This document provides a **step-by-step guide** for setting up a remote kernel in GPU-enabled EC2 instance using AWS CloudFormation. The setup allows you to run GPU-accelerated tasks on a remote instance.
 
-## GPU provisioning
 
-### Creating a Remote GPU Kernel on AWS
+---
 
-#### Validate CloudFormation template
+## 📦 Prerequisites
+
+- AWS account with proper permissions (CloudFormation, EC2, Image Builder, IAM, SSM)
+- AWS CLI installed and configured (`aws configure`)
+- An existing SSH KeyPair in AWS (or create one beforehand)
+- A public IP address to restrict SSH access (optional but recommended)
+
+---
+
+## 🚀 GPU provisioning
+
+### 1️⃣ Validate `gpu_remote_kernel.yaml`
 
 Install https://github.com/aws-cloudformation/cfn-lint for validation
 
@@ -15,31 +24,29 @@ Install https://github.com/aws-cloudformation/cfn-lint for validation
 cfn-lint gpu_remote_kernel.yaml
 ```
 
-#### Get your public IP
+### 2️⃣ Get your public IP
 
 ```shell
 curl https://checkip.amazonaws.com
 ```
 
-#### Deploy CloudFormation stack
-
-Ensure you have a valid aws environment configured with the necessary permissions. Otherwise do `aws configiure` first
+### 3️⃣ Deploy the CloudFormation stack
 
 ```shell
-aws cloudformation create-stack \
+aws cloudformation deploy \
   --stack-name gpu-remote-kernel \
-  --template-body file://gpu_remote_kernel.yaml \
-  --parameters \
-    ParameterKey=KeyPairName,ParameterValue=somesshkey \
-    ParameterKey=AllowedSSHLocation,ParameterValue=<your-public-ip>/32 \
-    ParameterKey=InstanceType,ParameterValue=g4dn.xlarge \
+  --template-file gpu_remote_kernel.yaml \
+  --parameter-overrides \
+    KeyPairName=somesshkey \
+    AllowedSSHLocation=<your-public-ip>/32 \
+    InstanceType=g4dn.2xlarge \
   --region ap-south-1 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-> Can use ParameterKey=AllowedSSHLocation,ParameterValue=0.0.0.0/0 if open SSH is needed, else restrict to your IP.
+> Can use AllowedSSHLocation=0.0.0.0/0 if open SSH is needed, else restrict to your IP.
 
-#### Check stack status
+### 4️⃣ Check stack status
 
 ```shell
 aws cloudformation describe-stacks --stack-name gpu-remote-kernel
@@ -49,7 +56,7 @@ aws cloudformation describe-stacks --stack-name gpu-remote-kernel
 aws cloudformation describe-stack-events --stack-name gpu-remote-kernel
 ```
 
-#### Get connection details
+### 5️⃣ Get connection details
 
 ```shell
 export AWS_ELASTIC_IP=$(aws cloudformation describe-stacks \
@@ -60,23 +67,15 @@ export AWS_ELASTIC_IP=$(aws cloudformation describe-stacks \
 echo "Elastic IP: $AWS_ELASTIC_IP"
 ```
 
-#### Test SSH connectivity
+### 6️⃣ Test SSH connectivity
 
 ```shell 
 ssh -i "$AWS_SSH_PEM_PATH" ubuntu@$AWS_ELASTIC_IP
-nvidia-smi
 ```
 
-#### Copy files to remote instance
+Alternately you can add entry to your `~/.ssh/config` file:
 
-```shell
-scp -i $AWS_SSH_PEM_PATH ./medical_diagnosis_manual.pdf ubuntu@$AWS_ELASTIC_IP:/home/ubuntu/
-scp -i $AWS_SSH_PEM_PATH ./watermarks.py ubuntu@$AWS_ELASTIC_IP:/home/ubuntu/
-```
-
-#### Add/Update an entry to `.ssh/config`
-
-```shell
+```plaintext
 Host aws-gpu-mumbai
   HostName 113.123.58.0
   User ubuntu
@@ -85,7 +84,58 @@ Host aws-gpu-mumbai
 
 > Assuming AWS_ELASTIC_IP=113.123.58.0
 
-#### Configure remote_ikernel on your Mac
+Then use the alias to connect:
+
+```shell
+ssh aws-gpu-mumbai
+```
+
+### 7️⃣ Test Setup
+
+#### Check if NVIDIA drivers are installed
+
+```shell
+# Within the EC2 instance, run:
+nvidia-smi
+
+## If not found, check if any dpkg locks are present:
+
+# Identify the process holding the lock
+sudo lsof /var/lib/dpkg/lock-frontend
+
+# Verify what it’s doing
+ps -fp <ProcessID>
+
+# Monitor the process
+tail -f /var/log/dpkg.log
+```
+
+#### Conda Setup
+
+Check if conda is installed:
+
+```shell
+# Within the EC2 instance:
+# check if conda is installed
+source /opt/miniconda/etc/profile.d/conda.sh
+conda --version
+```
+
+You 'll have to run the scripts of [conda_installation.sh](conda_installation.sh) within the EC2 instance to set up the
+conda environment. It is not yet automated.
+
+```shell
+scp -i $AWS_SSH_PEM_PATH conda_installation.sh ubuntu@$AWS_ELASTIC_IP:/home/ubuntu/
+```
+
+> After copying the script, SSH into the instance and run it:
+```shell
+# Within the EC2 instance, run:
+chmod +x conda_installation.sh
+./conda_installation.sh
+```
+
+### 8️⃣ Configure remote_ikernel on your Mac
 
 ```shell
 pip install remote_ikernel
@@ -95,22 +145,30 @@ remote_ikernel manage --delete rik_ssh_aws_gpu_mumbai_awsgpumumbai
 
 # Add remote kernel configuration:
 remote_ikernel manage --add \
-  --interface ssh \
   --name "aws-gpu-mumbai" \
+  --interface ssh \
   --host aws-gpu-mumbai \
   --kernel_cmd="bash -c 'source /opt/miniconda/etc/profile.d/conda.sh && conda activate gpu-env && python -m ipykernel_launcher -f {connection_file}'"
 
+# Show configured remote kernels
+remote_ikernel manage --show
 ```
 
-#### Shutdown / clean up when done
+---
+
+## 🧹 Full Cleanup Guide: Returning to a Clean State
+
+### Delete the GPU instance stack (`gpu-remote-kernel`)
 
 ```shell
 aws cloudformation delete-stack --stack-name gpu-remote-kernel
 ```
 
-### Sanity
+### 🔎 Helpful sanity checks
 
-#### EC2 Instances
+> Use these checks to verify and clean up resources that incur ongoing AWS costs if left behind after stack deletion.
+
+#### Check all running EC2 instances:
 
 ```shell
 #aws ec2 terminate-instances --instance-ids <InstanceId>
@@ -120,40 +178,21 @@ aws ec2 describe-instances \
   --output table
 ```
 
-#### Elastic IPs
+> Billable while running. Stopped instances still incur EBS volume cost for their attached volumes.
+
+#### Check Elastic IPs:
 
 ```shell
 #aws ec2 release-address --allocation-id <AllocationId>
 
 aws ec2 describe-addresses \
-  --query "Addresses[*].PublicIp" \
-  --output text
+  --query "Addresses[*].{PublicIp:PublicIp, AllocationId:AllocationId, AssociatedInstanceId:InstanceId}" \
+  --output table
 ```
 
-### Resources defined in the template
+> Look for entries with `AssociatedInstanceId` as `null` → billable unattached IPs.
 
-> Resources + Pricing impact
-
-| **Resource Logical ID**       | **Type**                                | **Purpose**                       | **Price Charged**                                                    |
-|-------------------------------|-----------------------------------------|-----------------------------------|----------------------------------------------------------------------|
-| `RemoteKernelVPC`             | `AWS::EC2::VPC`                         | Virtual network for isolation     | 🆓 Free (no hourly charge for VPC itself)                            |
-| `PublicSubnet`                | `AWS::EC2::Subnet`                      | Subnet for public IP assignment   | 🆓 Free                                                              |
-| `InternetGateway`             | `AWS::EC2::InternetGateway`             | Enables Internet access           | 🆓 Free                                                              |
-| `AttachGateway`               | `AWS::EC2::VPCGatewayAttachment`        | Attachment of IGW to VPC          | 🆓 Free                                                              |
-| `PublicRouteTable`            | `AWS::EC2::RouteTable`                  | Route table for outbound traffic  | 🆓 Free (first 200 per VPC)                                          |
-| `PublicRoute`                 | `AWS::EC2::Route`                       | Default route via IGW             | 🆓 Free                                                              |
-| `SubnetRouteTableAssociation` | `AWS::EC2::SubnetRouteTableAssociation` | Associates subnet and route table | 🆓 Free                                                              |
-| `ElasticIP`                   | `AWS::EC2::EIP`                         | Allocates static public IP        | 🆓 Free **while attached**; \~\$0.005/hr if allocated but unattached |
-| `InstanceRole`                | `AWS::IAM::Role`                        | IAM permissions                   | 🆓 Free                                                              |
-| `InstanceProfile`             | `AWS::IAM::InstanceProfile`             | Attach IAM role to EC2            | 🆓 Free                                                              |
-| `InstanceSecurityGroup`       | `AWS::EC2::SecurityGroup`               | Controls network access           | 🆓 Free                                                              |
-| `GPUInstance`                 | `AWS::EC2::Instance`                    | Actual compute instance           | 💸 \~\$0.60/hr for `g4dn.xlarge` (`ap-south-1` Mumbai)               |
-| `EIPAssociation`              | `AWS::EC2::EIPAssociation`              | Associates Elastic IP with EC2    | 🆓 Free while associated                                             |
-
-## Conda Setup
-
-You 'll have to run the scripts of [conda_installation.sh](conda_installation.sh) within the EC2 instance to set up the
-conda environment. It is not yet automated.
+---
 
 ## 🛠️ Troubleshooting
 
@@ -164,11 +203,13 @@ AWS accounts have default limits (quotas) for GPU instances that may be set to `
 To check your current limits and request an increase:
 
 #### **Check current quota:**
+
 ```shell
 aws service-quotas get-service-quota   --service-code ec2   --quota-code L-DB2E81BA   --region ap-south-1
 ```
 
 #### **Request a limit increase using CLI:**
+
 ```shell
 aws service-quotas request-service-quota-increase   --service-code ec2   --quota-code L-DB2E81BA   --desired-value 4   --region ap-south-1
 ```
@@ -177,6 +218,7 @@ Alternatively, submit a request manually:
 
 - Go to the [AWS Service Quotas console](https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas)
 - Search for "Running On-Demand G and VT instances"
-- Submit a **Request quota increase** for your desired instance type (`g4dn.xlarge`, `g5.xlarge`, etc.) in your target region (e.g., `ap-south-1`).
+- Submit a **Request quota increase** for your desired instance type (`g4dn.xlarge`, `g5.xlarge`, etc.) in your target
+  region (e.g., `ap-south-1`).
 
 > ℹ️ Approval may take a few minutes to hours depending on your AWS account history.
