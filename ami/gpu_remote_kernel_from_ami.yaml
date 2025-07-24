@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  🔧 Secure and reusable AWS CloudFormation template for provisioning a GPU-backed
+  remote kernel environment with VPC, Subnet, Internet connectivity,
+  Security Group, IAM Role, and GPU EC2 instance ready for remote_ikernel use.
+
+Metadata:
+  Version: "1.0"
+  Date: "2024-07-10"
+  Notes: |
+    - Customizable KeyPair
+    - Mandatory SSH IP restriction (no default)
+    - Dynamic AMI ID via SSM Parameter Store
+    - Driver compatibility for g4dn (T4) and g5 (A10G)
+    - Elastic IP association
+
+Parameters:
+  KeyPairName:
+    Description: Name of an existing EC2 KeyPair for SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+
+  AllowedSSHLocation:
+    Description: >
+      IP range allowed to SSH (e.g., your public IP with /32).
+      ⚠️ Mandatory parameter: No default provided for security.
+    Type: String
+    MinLength: 9
+
+  InstanceType:
+    Description: EC2 GPU instance type
+    Type: String
+    Default: g4dn.xlarge
+    AllowedValues:
+      - g4dn.xlarge
+      - g4dn.2xlarge
+      - g5.xlarge
+      - g5.2xlarge
+
+  PreBakedAmiId:
+    Description: AMI ID of pre-baked GPU image
+    Type: AWS::EC2::Image::Id
+
+Resources:
+
+  RemoteKernelVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: RemoteKernelVPC
+        - Key: Environment
+          Value: remote-kernel
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RemoteKernelVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: RemoteKernelSubnet
+        - Key: Environment
+          Value: remote-kernel
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RemoteKernelVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RemoteKernelVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: [sts:AssumeRole]
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH from Allowed IP
+      VpcId: !Ref RemoteKernelVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHLocation
+
+  GPUInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      ImageId: !Ref PreBakedAmiId
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref InstanceSecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 100
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: GPUInstance
+        - Key: Environment
+          Value: remote-kernel
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref GPUInstance
+      EIP: !Ref ElasticIP
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref GPUInstance
+
+  PublicIP:
+    Description: Elastic IP address of GPU instance
+    Value: !Ref ElasticIP
